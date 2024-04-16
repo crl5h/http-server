@@ -8,6 +8,23 @@
 #include <unistd.h>
 
 #define BUFF_SIZE 1024
+#define HTTP_OK "HTTP/1.1 200 OK\r\n"
+#define HTTP_NOT_FOUND "HTTP/1.1 404 Not Found\r\n\r\n"
+#define CONTENT_TYPE_TEXT "Content-Type:"
+#define CONTENT_LENGTH "Content-Length:"
+
+struct Request {
+    char http_method[10];
+    char path[100];
+    char http_protocol[10];
+} request;
+
+struct Reponse {
+    char status_code[10];
+    char content_type[100];
+    char content_length[10];
+    char content[50];
+} response;
 
 int main() {
     // Disable output buffering
@@ -15,38 +32,38 @@ int main() {
 
     // socket file descriptor
     int server_fd, client_addr_len;
-	
-	// client socket address
-	struct sockaddr_in client_addr;
 
-	struct sockaddr_in serv_addr = {
+    // client socket address
+    struct sockaddr_in client_addr;
+
+    struct sockaddr_in serv_addr = {
         .sin_family = AF_INET,
         .sin_port = htons(4221),
         .sin_addr = {htonl(INADDR_ANY)},
     };
 
-	// socket of type ipv4, tcp, default protocol
+    // socket of type ipv4, tcp, default protocol
     server_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server_fd == -1) {
         printf("Socket creation failed: %s...\n", strerror(errno));
         return 1;
     }
 
-	// reuseport allows multiple sockets to bind to the same address and port
-	// it avoids the "Address already in use" error
+    // reuseport allows multiple sockets to bind to the same address and port
+    // it avoids the "Address already in use" error
     int reuse = 1;
     if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEPORT, &reuse, sizeof(reuse)) < 0) {
         printf("SO_REUSEPORT failed: %s \n", strerror(errno));
         return 1;
     }
 
-	// bind the server socket to the address and port
+    // bind the server socket to the address and port
     if (bind(server_fd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) != 0) {
         printf("Bind failed: %s \n", strerror(errno));
         return 1;
     }
 
-	// listen for incoming connections from clients
+    // listen for incoming connections from clients
     int connection_backlog = 5;
     if (listen(server_fd, connection_backlog) != 0) {
         printf("Listen failed: %s \n", strerror(errno));
@@ -55,38 +72,54 @@ int main() {
 
     printf("Waiting for a client to connect...\n");
     client_addr_len = sizeof(client_addr);
-	int client_fd = accept(server_fd, (struct sockaddr *)&client_addr, &client_addr_len);
+    int client_fd = accept(server_fd, (struct sockaddr *)&client_addr, &client_addr_len);
     printf("Client connected\n");
 
     char buffer[BUFF_SIZE];
     int bytes_read = read(client_fd, buffer, BUFF_SIZE);
-	if(bytes_read == -1){
-		printf("Error reading from client: %s\n", strerror(errno));
-		close(client_fd);
-		return 1;
-	}
-	// printf("Client sent: %s\n-- %d bytes\n", buffer, bytes_read);
-	// write(client_fd, "HTTP/1.1 200 OK\r\n\r\n", 19);
-    
-	int i = 4;
-	while(i < BUFF_SIZE && buffer[i] != ' '){
-		i++;
-	}
+    if (bytes_read == -1) {
+        printf("Error reading from client: %s\n", strerror(errno));
+        close(client_fd);
+        return 1;
+    }
+    // printf("Client sent: %s\n-- %d bytes\n", buffer, bytes_read);
+    // write(client_fd, "HTTP/1.1 200 OK\r\n\r\n", 19);
 
-	int buff_length = i - 5;
-	// printf("Buffer length: %d\n", buff_length);
-	if(buff_length == 0){
-		write(client_fd, "HTTP/1.1 200 OK\r\n\r\n", 19);
-	}
-	else{
-		write(client_fd, "HTTP/1.1 404 Not Found\r\n\r\n", 26);
-	}
-	
-	// close the client and server sockets
-	close(client_fd);
-	if (server_fd != -1) {
-		close(server_fd);
-	}
+    // parse from buffer
+    sscanf(buffer, "%s%s%s", request.http_method, request.path, request.http_protocol);
+    // printf("Method: %s\n", request.http_method);
+    // printf("Path: %s\n", request.path);
+    // printf("Protocol: %s\n", request.http_protocol);
+    printf("path: %s\n", request.path);
+
+    // if echo in url
+    if (strncmp("/echo/", request.path, 6) == 0) {
+        printf("Sending 200...\n");
+        char *resp = malloc(512 * sizeof(char));
+        char content[100];
+        for (int i = 0; i < strlen(request.path); i++) {
+            content[i] = request.path[i + 6];
+        }
+        sprintf(resp, "%sContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s", HTTP_OK, (int)strlen(request.path) - 6, content);
+        write(client_fd, resp, 100);
+
+    }
+    // if empty path
+    else if (strcmp("/", request.path) == 0) {
+        printf("Sending 200...\n");
+        char *resp = "HTTP/1.1 200 OK\r\n\r\nContent-Type: text/plain\r\nContent-Length: 0\r\n\r\n";
+        write(client_fd, resp, 67);
+    }
+    // not (empty || echo)
+    else {
+        printf("Sending 404...\n");
+        write(client_fd, HTTP_NOT_FOUND, 27);
+    }
+    // close the client and server sockets
+    close(client_fd);
+    if (server_fd != -1) {
+        close(server_fd);
+    }
     close(server_fd);
 
     return 0;
@@ -95,14 +128,14 @@ int main() {
 /*
 
 basic architecture of tcp server:
-	1. create a socket
-	2. bind the socket to an address and port
-	3. listen for incoming connections
-	4. accept the connection
-	5. send and receive data
+        1. create a socket
+        2. bind the socket to an address and port
+        3. listen for incoming connections
+        4. accept the connection
+        5. send and receive data
 
 client:
-	1. create a socket
-	2. connect to the server
-	3. send and receive data
+        1. create a socket
+        2. connect to the server
+        3. send and receive data
 */

@@ -9,3 +9,4 @@ set -e
 tmpFile=$(mktemp)
 gcc -lcurl app/*.c -o $tmpFile
 exec "$tmpFile" "$@"
+# exec "$tmpFile" "$@" & curl -i -X  GET localhost:4221/echo/yikes/Coo-Monkey --output -
