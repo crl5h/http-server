@@ -79,7 +79,7 @@ int main() {
 		write(client_fd, "HTTP/1.1 200 OK\r\n\r\n", 19);
 	}
 	else{
-		write(client_fd, "HTTP/1.1 404 Not Found\r\n\r\n", 25);
+		write(client_fd, "HTTP/1.1 404 Not Found\r\n\r\n", 26);
 	}
 	
 	// close the client and server sockets
