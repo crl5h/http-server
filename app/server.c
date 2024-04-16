@@ -7,6 +7,8 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#define BUFF_SIZE 1024
+
 int main() {
     // Disable output buffering
     setbuf(stdout, NULL);
@@ -56,11 +58,35 @@ int main() {
 	int client_fd = accept(server_fd, (struct sockaddr *)&client_addr, &client_addr_len);
     printf("Client connected\n");
 
-    write(client_fd, "HTTP/1.1 200 OK\r\n\r\n", 19);
-    // char buffer[1024];
-    // read(server_fd, buffer, 1024);
-    // printf("Client sent: %s\n", buffer);
+    char buffer[BUFF_SIZE];
+    int bytes_read = read(client_fd, buffer, BUFF_SIZE);
+	if(bytes_read == -1){
+		printf("Error reading from client: %s\n", strerror(errno));
+		close(client_fd);
+		return 1;
+	}
+	// printf("Client sent: %s\n-- %d bytes\n", buffer, bytes_read);
+	// write(client_fd, "HTTP/1.1 200 OK\r\n\r\n", 19);
+    
+	int i = 4;
+	while(i < BUFF_SIZE && buffer[i] != ' '){
+		i++;
+	}
 
+	int buff_length = i - 5;
+	// printf("Buffer length: %d\n", buff_length);
+	if(buff_length == 0){
+		write(client_fd, "HTTP/1.1 200 OK\r\n\r\n", 19);
+	}
+	else{
+		write(client_fd, "HTTP/1.1 404 Not Found\r\n\r\n", 25);
+	}
+	
+	// close the client and server sockets
+	close(client_fd);
+	if (server_fd != -1) {
+		close(server_fd);
+	}
     close(server_fd);
 
     return 0;
