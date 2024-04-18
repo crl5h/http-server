@@ -1,6 +1,7 @@
 #include <errno.h>
 #include <netinet/in.h>
 #include <netinet/ip.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -13,59 +14,95 @@
 #define CONTENT_TYPE_TEXT "Content-Type: text/plain\r\n"
 #define CONTENT_LENGTH "Content-Length:"
 #define USER_AGENT_LEN 12
+
 struct Request {
-    char http_method[10];
-    char path[100];
-    char http_protocol[10];
-    char user_agent[100];
-    char host[100];
-    char accept[100];
-} request;
+    char *http_method;
+    char *path;
+    char *http_protocol;
+    char *user_agent;
+    char *host;
+    char *accept;
+};
 
-struct Reponse {
-    char status_code[10];
-    char content_type[100];
-    char content_length[10];
-    char content[50];
-} response;
-
-// send_response(client_fd, HTTP_OK, "text/plain", content);
-void sendResponse(int client_fd, const char* status, const char* content, int content_length) {
+void sendResponse(int client_fd, const char *status, const char *content, int content_length) {
     char response[1024];
-    sprintf(response, "%sContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s", status, content_length, content);
-    // printf("\nResponse: %s\n", response);
-    send(client_fd, response, strlen(response), 0);
+    if (sprintf(response, "%sContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s", status, content_length, content) < 0) {
+        printf("Error creating response: %s\n", strerror(errno));
+    }
+    printf("Response: %s\n", response);
+    if (send(client_fd, response, strlen(response), 0) == -1) {
+        printf("Error sending response: %s\n", strerror(errno));
+    }
 }
 
-void parseHeader(char* buffer) {
-    char* token = strtok(buffer, "\r\n");  // tokenize the buffer
+void parseHeader(char *buffer, struct Request *request) {
+    char *token = strtok(buffer, "\r\n");  // tokenize the buffer
     for (int i = 0; i < 5; i++) {
-        // printf("-%s\n", token);
         if (token == NULL) {
             break;
         }
         if (strncmp(token, "User-Agent", 10) == 0) {
-            strcat(request.user_agent, token + 12);
+            request->user_agent = token + 12;
         } else if (strncmp(token, "Host", 4) == 0) {
-            strcat(request.host, token + 6);
-            // printf("->Host is: %s\n", request.host);
+            request->host = token + 6;
         } else if (strncmp(token, "Accept", 6) == 0) {
-            strcat(request.accept, token + 8);
-            // printf("->Accept is: %s\n", request.accept);
+            request->accept = token + 8;
         }
         token = strtok(NULL, "\r\n");
     }
 }
 
+void *handle_connection(void *arg) {
+    
+    // char buffer[BUFF_SIZE];
+    // memset(buffer, 0, BUFF_SIZE);
+    char buffer[BUFF_SIZE] = {0};
+
+    int client_fd = *(int *)arg;
+    free(arg);
+
+    if (recv(client_fd, buffer, sizeof(buffer) - 1, 0) == -1) {
+        printf("Error reading from client: %s\n", strerror(errno));
+        close(client_fd);
+    }
+
+    struct Request request;
+    
+    request.http_method = (char *)malloc(10);
+    request.path = (char *)malloc(100);
+    request.http_protocol = (char *)malloc(10);
+
+    // printf("Received: %s\n", buffer);
+    if (sscanf(buffer, "%s %s %s", request.http_method, request.path, request.http_protocol) != 3) {
+        printf("Failed to parse input\n");
+        close(client_fd);
+    }
+    parseHeader(buffer, &request);
+
+    if (strncmp("/echo/", request.path, 6) == 0) {
+        printf("Sending 200...\n");
+        char content[100];
+        int content_length = strlen(request.path) - 6;
+        strncpy(content, request.path + 6, content_length);
+        content[content_length] = '\0';
+        sendResponse(client_fd, HTTP_OK, content, strlen(content));
+    } else if (strcmp("/user-agent", request.path) == 0) {
+        printf("Sending 200...\n");
+        sendResponse(client_fd, HTTP_OK, request.user_agent, strlen(request.user_agent));
+    } else if (strcmp("/", request.path) == 0) {
+        printf("Sending 200...\n");
+        sendResponse(client_fd, HTTP_OK, "", 0);
+    } else {
+        printf("Sending 404...\n");
+        sendResponse(client_fd, HTTP_NOT_FOUND, "", 0);
+    }
+    close(client_fd);
+}
+
 int main() {
-    // Disable output buffering
     setbuf(stdout, NULL);
 
-    // socket file descriptor
-    int server_fd, client_addr_len;
-
-    // client socket address
-    struct sockaddr_in client_addr;
+    int server_fd;
 
     struct sockaddr_in serv_addr = {
         .sin_family = AF_INET,
@@ -73,92 +110,53 @@ int main() {
         .sin_addr = {htonl(INADDR_ANY)},
     };
 
-    // socket of type ipv4, tcp, default protocol
     server_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server_fd == -1) {
         printf("Socket creation failed: %s...\n", strerror(errno));
         return 1;
     }
 
-    // reuseport allows multiple sockets to bind to the same address and port
-    // it avoids the "Address already in use" error
     int reuse = 1;
     if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEPORT, &reuse, sizeof(reuse)) < 0) {
         printf("SO_REUSEPORT failed: %s \n", strerror(errno));
         return 1;
     }
 
-    // bind the server socket to the address and port
-    if (bind(server_fd, (struct sockaddr*)&serv_addr, sizeof(serv_addr)) != 0) {
+    if (bind(server_fd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) != 0) {
         printf("Bind failed: %s \n", strerror(errno));
         return 1;
     }
 
-    // listen for incoming connections from clients
     int connection_backlog = 5;
     if (listen(server_fd, connection_backlog) != 0) {
         printf("Listen failed: %s \n", strerror(errno));
         return 1;
     }
 
-    printf("Waiting for a client to connect...\n");
-    client_addr_len = sizeof(client_addr);
-    int client_fd = accept(server_fd, (struct sockaddr*)&client_addr, &client_addr_len);
-    if (client_fd == -1) {
-        printf("Accept failed: %s \n", strerror(errno));
-    }
-    printf("Client connected\n");
+    while (1) {
+        struct sockaddr_in client_addr;
+        socklen_t client_addr_len = sizeof(client_addr);
+        printf("Waiting for a client to connect...\n");
 
-    char buffer[BUFF_SIZE];
-    int bytes_read = read(client_fd, buffer, BUFF_SIZE);
-    if (bytes_read == -1) {
-        printf("Error reading from client: %s\n", strerror(errno));
-        close(client_fd);
-        return 1;
-    }
+        client_addr_len = sizeof(client_addr);
+        int *client_fd = malloc(sizeof(int));
+        *client_fd = accept(server_fd, (struct sockaddr *)&client_addr, &client_addr_len);
 
-    // printf("\nbuffer:\n%s\n", buffer);
-    // parse method,path,protocol buffer and store in request struct
-    sscanf(buffer, "%s%s%s", request.http_method, request.path, request.http_protocol);
-    // parses useragent, host, accept
-    parseHeader(buffer);
-
-    // printf("->Method: %s\n", request.http_method);
-    // printf("->Path: %s\n", request.path);
-    // printf("->Protocol: %s\n", request.http_protocol);
-    // printf("->Host is: %s\n", request.host);
-    // printf("->User-Agent is: %s\n", request.user_agent);
-    // printf("->Accept is: %s\n", request.accept);
-
-    // if echo in url
-    if (strncmp("/echo/", request.path, 6) == 0) {
-        printf("Sending 200...\n");
-        char resp[1024];
-        char content[100];
-        for (int i = 0; i < strlen(request.path); i++) {
-            content[i] = request.path[i + 6];
+        if (*client_fd == -1) {
+            printf("Accept failed: %s \n", strerror(errno));
         }
-        sendResponse(client_fd, HTTP_OK, content, strlen(content));
-    } else if (strcmp("/user-agent", request.path) == 0) {
-        printf("Sending 200...\n");
-        sendResponse(client_fd, HTTP_OK, request.user_agent, strlen(request.user_agent));
-    }
-    // if empty path
-    else if (strcmp("/", request.path) == 0) {
-        printf("Sending 200...\n");
-        // char *resp = "HTTP/1.1 200 OK\r\n\r\nContent-Type: text/plain\r\nContent-Length: 0\r\n\r\n";
-        sendResponse(client_fd, HTTP_OK, "", 0);
-    }
-    // not (empty || echo)
-    else {
-        printf("Sending 404...\n");
-        sendResponse(client_fd, HTTP_NOT_FOUND, "", 0);
+        printf("Client connected\n");
+
+        pthread_t tid;
+        if (pthread_create(&tid, NULL, handle_connection, client_fd) != 0) {
+            printf("Error creating thread: %s\n", strerror(errno));
+            close(*client_fd);
+        } else {
+            pthread_detach(tid);
+        }
     }
 
-    // close the client and server sockets
-    close(client_fd);
     close(server_fd);
-
     return 0;
 }
 
