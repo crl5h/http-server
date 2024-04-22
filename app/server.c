@@ -10,6 +10,7 @@
 #define BUFF_SIZE 1024
 #define HTTP_OK "HTTP/1.1 200 OK\r\n"
 #define HTTP_NOT_FOUND "HTTP/1.1 404 Not Found\r\n"
+#define STATUS_CREATED "HTTP/1.1 201 CREATED\r\n"
 #define CONTENT_TYPE_TEXT "Content-Type: text/plain\r\n"
 #define CONTENT_TYPE_APP_OCTET "Content-Type: application/octet-stream\r\n"
 
@@ -24,6 +25,7 @@ struct Request {
     char *user_agent;
     char *host;
     char *accept;
+    char *content;
 };
 
 struct targs {
@@ -31,12 +33,10 @@ struct targs {
     char *dir;
 };
 
-
 void *handle_connection(void *arg);
 void parseHeader(char *buffer, struct Request *request);
 void set_response(char *buffer, int client_fd, char *dir);
 void sendResponse(int client_fd, const char *status, const char *content_type, const char *content, size_t content_length);
-
 
 int main(int argc, char *argv[]) {
     setbuf(stdout, NULL);
@@ -133,7 +133,9 @@ void sendResponse(int client_fd, const char *status, const char *content_type, c
 
 void parseHeader(char *buffer, struct Request *request) {
     char *token = strtok(buffer, "\r\n");  // tokenize the buffer
+
     for (int i = 0; i < 5; i++) {
+        printf("token(%d)-->%s\n", i, token);
         if (token == NULL) {
             break;
         }
@@ -146,6 +148,11 @@ void parseHeader(char *buffer, struct Request *request) {
         }
         token = strtok(NULL, "\r\n");
     }
+    if (strncmp(request->http_method, "POST", 4) == 0) {
+        // not storing content_length rn
+        request->content = token;
+        token = strtok(NULL, "\r\n");
+    }
 }
 
 void set_response(char *buffer, int client_fd, char *dir) {
@@ -156,7 +163,7 @@ void set_response(char *buffer, int client_fd, char *dir) {
     request.http_protocol = (char *)malloc(10);
 
     // printf("Received: %s\n", buffer);
-    // write request data to request struct from buffer  
+    // write request data to request struct from buffer
     if (sscanf(buffer, "%s %s %s", request.http_method, request.path, request.http_protocol) != 3) {
         printf("Failed to parse input\n");
         close(client_fd);
@@ -180,55 +187,77 @@ void set_response(char *buffer, int client_fd, char *dir) {
         sendResponse(client_fd, HTTP_OK, CONTENT_TYPE_TEXT, "", 0);
     } else if (strncmp("/files/", request.path, 7) == 0) {
         printf(GREEN "in files\n" RESET);
-        if (strncmp(dir, "",1) == 0) {
+        if (strncmp(dir, "", 1) == 0) {
             printf(RED "No directory provided\n" RESET);
             sendResponse(client_fd, HTTP_NOT_FOUND, CONTENT_TYPE_TEXT, "", 0);
             return;
         }
-
-        char fname[512];
+        char fname[32];
+        fname[0] = '\0';
         strcat(fname, dir);
         strcat(fname, request.path + 7);
         printf("\nfilename->%s \n", fname);
 
-        FILE *fd = fopen(fname, "r");
-        if (fd == NULL) {
-            printf(RED "Error opening file: %s" RESET "\n", strerror(errno));
-            sendResponse(client_fd, HTTP_NOT_FOUND, CONTENT_TYPE_TEXT, "", 0);
+        if (strncmp(request.http_method, "POST", 4) == 0) {
+            FILE *fd = fopen(fname, "w");
+            if (fd == NULL) {
+                printf(RED "Error opening file: %s" RESET "\n", strerror(errno));
+                sendResponse(client_fd, HTTP_NOT_FOUND, CONTENT_TYPE_TEXT, "", 0);
+                memset(buffer, 0, strlen(buffer));
+                memset(fname, 0, strlen(fname));
+                return;
+            }
+
+            printf("Writing to file: %s\n", request.content);
+            if (!fwrite(request.content, 1, strlen(request.content), fd)) {
+                printf("Cant write!\n");
+            }
+            sendResponse(client_fd, STATUS_CREATED, CONTENT_TYPE_TEXT, "", 0);
             memset(buffer, 0, strlen(buffer));
             memset(fname, 0, strlen(fname));
-            return;
+            fclose(fd);
+        } else {
+            // get method for /files
+            // printf(GREEN "Sending 200...(files)\n" RESET);
+
+            FILE *fd = fopen(fname, "r");
+            if (fd == NULL) {
+                printf(RED "Error opening file: %s" RESET "\n", strerror(errno));
+                sendResponse(client_fd, HTTP_NOT_FOUND, CONTENT_TYPE_TEXT, "", 0);
+                memset(buffer, 0, strlen(buffer));
+                memset(fname, 0, strlen(fname));
+                return;
+            }
+
+            long fileLength;
+            fseek(fd, 0, SEEK_END);
+            fileLength = ftell(fd);
+            rewind(fd);
+
+            char *content = (char *)malloc(fileLength);
+            size_t byteSize = fread(content, 1, fileLength, fd);
+
+            char buff[BUFF_SIZE];
+            sprintf(buff, "%s%sContent-Length: %ld\r\n\r\n", HTTP_OK, CONTENT_TYPE_APP_OCTET, fileLength);
+            // strcat(buff, temp);
+            strcat(content, "\r\n");
+            // printf("Response(127):\n%s\n", buff);
+            if (send(client_fd, buff, strlen(buff), 0) == -1) {
+                printf(RED "Error sending response: %s\n" RESET, strerror(errno));
+            }
+            if (send(client_fd, content, fileLength, 0) == -1) {
+                printf(RED "Error sending response: %s\n" RESET, strerror(errno));
+            }
+
+            memset(buff, 0, strlen(buff));
+            memset(buffer, 0, strlen(buffer));
+            memset(content, 0, fileLength);
+            memset(fname, 0, strlen(fname));
+            free(content);
+
+            fclose(fd);
         }
 
-        // printf(GREEN "Sending 200...(files)\n" RESET);
-
-        long fileLength;
-        fseek(fd, 0, SEEK_END);
-        fileLength = ftell(fd);
-        rewind(fd);
-
-        char *content = (char *)malloc(fileLength);
-        size_t byteSize = fread(content, 1, fileLength, fd);
-
-        char buff[BUFF_SIZE];
-        sprintf(buff, "%s%sContent-Length: %ld\r\n\r\n", HTTP_OK, CONTENT_TYPE_APP_OCTET, fileLength);
-        // strcat(buff, temp);
-        strcat(content, "\r\n");
-        // printf("Response(127):\n%s\n", buff);
-        if (send(client_fd, buff, strlen(buff), 0) == -1) {
-            printf(RED "Error sending response: %s\n" RESET, strerror(errno));
-        }
-        if(send(client_fd, content, fileLength, 0)==-1){
-            printf(RED "Error sending response: %s\n" RESET, strerror(errno));
-        }
-        
-        memset(buff, 0, strlen(buff));
-        memset(buffer, 0, strlen(buffer));
-        memset(content, 0, fileLength);
-        memset(fname, 0, strlen(fname));
-        free(content);
-
-        fclose(fd);
     } else {
         printf("Sending 404!...\n");
         sendResponse(client_fd, HTTP_NOT_FOUND, CONTENT_TYPE_TEXT, "", 0);
