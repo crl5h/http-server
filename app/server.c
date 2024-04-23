@@ -100,6 +100,7 @@ int main(int argc, char *argv[]) {
         printf(GREEN "dir is --%s\n%d\n" RESET, targs->dir, *client_fd);
 
         pthread_t tid;
+        // handle_connection(targs);
         int tc = pthread_create(&tid, NULL, handle_connection, targs);
         if (tc != 0) {
             printf(RED "Error creating thread: %s\n" RESET, strerror(errno));
@@ -151,7 +152,8 @@ void parseHeader(char *buffer, struct Request *request) {
     if (strncmp(request->http_method, "POST", 4) == 0) {
         // not storing content_length rn
         request->content = token;
-        token = strtok(NULL, "\r\n");
+    } else {
+        request->content = NULL;
     }
 }
 
@@ -194,8 +196,8 @@ void set_response(char *buffer, int client_fd, char *dir) {
         }
         char fname[32];
         fname[0] = '\0';
-        strcat(fname, dir);
-        strcat(fname, request.path + 7);
+        strncat(fname, dir, strlen(dir));
+        strncat(fname, request.path + 7, strlen(request.path) - 7);
         printf("\nfilename->%s \n", fname);
 
         if (strncmp(request.http_method, "POST", 4) == 0) {
@@ -229,18 +231,18 @@ void set_response(char *buffer, int client_fd, char *dir) {
                 return;
             }
 
-            long fileLength;
             fseek(fd, 0, SEEK_END);
-            fileLength = ftell(fd);
+            long fileLength = ftell(fd);
             rewind(fd);
 
-            char *content = (char *)malloc(fileLength);
+            char content[fileLength];
             size_t byteSize = fread(content, 1, fileLength, fd);
+            fclose(fd);
 
             char buff[BUFF_SIZE];
             sprintf(buff, "%s%sContent-Length: %ld\r\n\r\n", HTTP_OK, CONTENT_TYPE_APP_OCTET, fileLength);
             // strcat(buff, temp);
-            strcat(content, "\r\n");
+            strncat(content, "\r\n", 3);
             // printf("Response(127):\n%s\n", buff);
             if (send(client_fd, buff, strlen(buff), 0) == -1) {
                 printf(RED "Error sending response: %s\n" RESET, strerror(errno));
@@ -253,9 +255,7 @@ void set_response(char *buffer, int client_fd, char *dir) {
             memset(buffer, 0, strlen(buffer));
             memset(content, 0, fileLength);
             memset(fname, 0, strlen(fname));
-            free(content);
-
-            fclose(fd);
+            memset(content, 0, strlen(content));
         }
 
     } else {
@@ -268,6 +268,7 @@ void set_response(char *buffer, int client_fd, char *dir) {
 }
 
 void *handle_connection(void *arg) {
+    // sleep(1);
     printf(GREEN "SETTING UP RESPONSE\n" RESET);
     struct targs *targs = (struct targs *)arg;
 
@@ -280,7 +281,6 @@ void *handle_connection(void *arg) {
         printf(RED "Error reading from client: %s\n" RESET, strerror(errno));
     }
     set_response(buffer, client_fd, dir);
-    // GET /files/<filename>.
     buffer[0] = '\0';
     close(client_fd);
     return NULL;
