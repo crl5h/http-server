@@ -1,0 +1,23 @@
+# sockets
+
+## Introduction
+
+Sockets are the endpoints of a bidirectional communication channel. Sockets may communicate within a process, between processes on the same machine, or between processes on different machines. Sockets may be implemented over a number of different channel types: Unix domain sockets, TCP, UDP, and so on.
+
+or 
+
+a way to speak to other programs using standard Unix file descriptors
+
+File descriptor: A file descriptor is simply an integer associated with an open file.
+
+the `socket()` system call returns a socket file descriptor and we can communicate through it using `send()` and `recv()`
+
+2 types of sockets:
+1. Stream socket(`SOCK_STREAM`):
+
+    Stream sockets are reliable two-way connected communication streams. It uses TCP protocol(read RFC 793)
+2. Datagram sockets(`SOCK_DGRAM`):
+
+    uses UDP protocol and Datagram sockets also use IP for routing.
+    It is connectionless.
+

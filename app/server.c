@@ -151,6 +151,7 @@ void parseHeader(char *buffer, struct Request *request) {
     }
     if (strncmp(request->http_method, "POST", 4) == 0) {
         // not storing content_length rn
+        token = strtok(NULL, "\r\n");
         request->content = token;
     } else {
         request->content = NULL;
@@ -181,7 +182,6 @@ void set_response(char *buffer, int client_fd, char *dir) {
         content[content_length] = '\0';
         sendResponse(client_fd, HTTP_OK, CONTENT_TYPE_TEXT, content, strlen(content));
     } else if (strncmp("/user-agent", request.path, 11) == 0) {
-        // green color
         printf("Sending 200...\n");
         sendResponse(client_fd, HTTP_OK, CONTENT_TYPE_TEXT, request.user_agent, strlen(request.user_agent));
     } else if (strlen(request.path) == 1 && strcmp("/", request.path) == 0) {
@@ -196,7 +196,7 @@ void set_response(char *buffer, int client_fd, char *dir) {
         }
         char fname[32];
         fname[0] = '\0';
-        strncat(fname, dir, strlen(dir));
+        strncat(fname, dir+1, strlen(dir)-1);
         strncat(fname, request.path + 7, strlen(request.path) - 7);
         printf("\nfilename->%s \n", fname);
 
@@ -268,7 +268,7 @@ void set_response(char *buffer, int client_fd, char *dir) {
 }
 
 void *handle_connection(void *arg) {
-    // sleep(1);
+    sleep(1); // enable sleep and to test concurrent connections from conc.py script
     printf(GREEN "SETTING UP RESPONSE\n" RESET);
     struct targs *targs = (struct targs *)arg;
 
